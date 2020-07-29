@@ -1,0 +1,172 @@
+PROJ=
+LANG=c
+SUBDIRS=
+ADD=-pthread -lboost_system
+
+################################################################################
+
+ifneq ($(ECHO),yes)
+	A=@
+	OTHERS_ECHO=-s
+endif
+
+ifeq ($(TEST),)
+	TEST_FILE=test_$(PROJ)
+else
+	TEST_FILE=t_$(PROJ)_$(TEST)
+endif
+
+ifeq ($(VERSION),release)
+	VERS=release
+	REVIEW_FLAGS=$(FLAGS_RELEASE)
+else
+	VERS=debug
+	REVIEW_FLAGS=$(FLAGS_DEBUG)
+endif
+
+ifneq ($(PROJ),)
+	COMMAND=$(VALGRIND) .$(VERS)_$(TEST_FILE).out $(ARGS) $(VLGFLAG)
+endif
+
+ifeq ($(VLG),yes)
+	VALGRIND=valgrind --leak-check=yes --track-origins=yes
+else ifneq ($(COMMAND),)
+	VLGMSG=echo "don't forget valgrind !"
+endif
+
+################################################################################
+
+ifeq ($(LANG),c++)
+	CC=g++
+	SRC_TERM=cpp
+	H_TERM=hpp
+else ifeq ($(LANG), c)
+	CC=gcc
+	SRC_TERM=c
+	H_TERM=h
+endif
+
+################################################################################
+
+CFLAGS=-Wall -Wextra
+
+INCLUDE_DIR=./
+INCLUDE_PATHS=$(INCLUDE_DIR) ~/binyamin-haymann/Proj/misc/ ~/binyamin-haymann/Proj/ ~/binyamin-haymann/Proj/src/cpp/
+INCLUDE=$(addprefix -I ,$(INCLUDE_PATHS))
+
+##
+
+FLAGS_DEBUG=$(CFLAGS) -g
+FLAGS_RELEASE=$(CFLAGS) -DNDEBUG -O3
+
+##
+
+SRC=$(wildcard *.$(SRC_TERM))
+OBJ_DIR=obj/
+DEBUG_DIR=$(OBJ_DIR)debug/
+RELEASE_DIR=$(OBJ_DIR)release/
+LIB_DIR=lib/
+OBJS=$(SRC:.$(SRC_TERM)=.o)
+OBJ_DEBUG:=$(addprefix $(DEBUG_DIR), $(OBJS))
+OBJ_RELEASE:=$(addprefix $(RELEASE_DIR), $(OBJS))
+
+#OTHER_OBJ_DEBUG=$(wildcard $(SUBDIRS)$(DEBUG_DIR)*.o)
+#OTHER_OBJ_RELEASE=$(wildcard $(SUBDIRS)$(RELEASE_DIR)*.o)
+
+OTHER_OBJ_DEBUG=$(foreach directory,$(SUBDIRS),$(wildcard $(directory)$(DEBUG_DIR)*.o))
+OTHER_OBJ_RELEASE=$(foreach directory,$(SUBDIRS),$(wildcard $(directory)$(RELEASE_DIR)*.o))
+
+##
+
+TEST_DIR=test/
+TESTS=$(notdir $(wildcard $(TEST_DIR)*.$(SRC_TERM)))
+
+##
+
+EXEC_DEBUG=$(addprefix .debug_, $(TESTS:.$(SRC_TERM)=.out))
+EXEC_RELEASE=$(addprefix .release_, $(TESTS:.$(SRC_TERM)=.out))
+
+##
+
+DEPENDENCIES_DEBUG = $(addprefix $(DEBUG_DIR).dependencies/, $(OBJS:.o=.d))
+DEPENDENCIES_RELEASE = $(addprefix $(RELEASE_DIR).dependencies/, $(OBJS:.o=.d))
+
+##
+
+DIR=XXXX
+DL_DEBUG=$(DIR)_debug
+DL_RELEASE=$(DIR)_release
+LIBDEBUG=$(LIB_DIR)lib$(DL_DEBUG).so
+LIBRELEASE=$(LIB_DIR)lib$(DL_RELEASE).so
+
+##
+
+DEP_DEBUG_DIR=$(DEBUG_DIR).dependencies/
+DEP_RELEASE_DIR=$(RELEASE_DIR).dependencies/
+REV_DIR=reviews/
+
+################################################################################
+
+all: $(SUBDIRS) build test test_release
+	$(A)$(COMMAND)
+	$(A)$(VLGMSG)
+
+test: debug $(EXEC_DEBUG)
+
+test_release: release $(EXEC_RELEASE)
+
+debug: $(LIBDEBUG)
+
+release: $(LIBRELEASE)
+
+.PHONY: $(SUBDIRS)
+$(SUBDIRS):
+	$(A)$(MAKE) -C $@ $(OTHERS_ECHO)
+
+$(LIBDEBUG): $(OBJ_DEBUG) $(OTHER_OBJ_DEBUG)
+	$(A)$(CC) $(FLAGS_DEBUG) -o $@ -shared $< $(OTHER_OBJ_DEBUG)
+
+$(LIBRELEASE): $(OBJ_RELEASE) $(OTHER_OBJ_RELEASE)
+	$(A)$(CC) $(FLAGS_RELEASE) -o $@ -shared $< $(OTHER_OBJ_RELEASE)
+
+-include $(DEPENDENCIES_DEBUG)
+
+$(DEBUG_DIR)%.o: %.$(SRC_TERM)
+	$(A)$(CC) $(FLAGS_DEBUG) $(INCLUDE) -fPIC -c -o $@ $< $(ADD)
+	$(A)gcc -MM $(INCLUDE) $< | sed -re 's/$*.o/obj\/debug\/$*.o/' > $(DEBUG_DIR).dependencies/$*.d
+
+-include $(DEPENDENCIES_RELEASE)
+
+$(RELEASE_DIR)%.o: %.$(SRC_TERM)
+	$(A)$(CC) $(FLAGS_RELEASE) $(INCLUDE) -fPIC -c -o $@ $< $(ADD)
+	$(A)gcc -MM $(INCLUDE) $< | sed -re 's/$*.o/obj\/release\/$*.o/' > $(RELEASE_DIR).dependencies/$*.d
+
+.debug_%.out: $(TEST_DIR)%.$(SRC_TERM)
+	$(A)$(CC) $(FLAGS_DEBUG) $(INCLUDE) -o $@ $< -l$(DL_DEBUG) -L$(LIB_DIR) -Wl,-rpath=$(LIB_DIR) $(ADD)
+
+.release_%.out: $(TEST_DIR)%.$(SRC_TERM)
+	$(A)$(CC) $(FLAGS_RELEASE) $(INCLUDE) -o $@  $< -l$(DL_RELEASE) -L$(LIB_DIR) -Wl,-rpath=$(LIB_DIR) $(ADD)
+
+################################################################################
+
+.PHONY: clean review clean_review clean_d build
+clean:
+	$(A)rm -f .*.out $(LIB_DIR)*.so $(DEBUG_DIR)*.o $(RELEASE_DIR)*.o $(DEBUG_DIR)other/*.o $(RELEASE_DIR)other/*.o $(DEBUG_DIR).dependencies/*.d $(RELEASE_DIR).dependencies/*.d
+
+review:
+	$(A)$(CC) -o $(REV_DIR).$(VERS)_$(NAME)_$(TEST_FILE).out $(REVIEW_FLAGS) $(INCLUDE) $(REV_DIR)$(PROJ)_$(NAME).$(SRC_TERM) $(TEST_DIR)$(TEST_FILE).$(SRC_TERM) $(ADD)
+	$(A)$(VALGRIND) $(REV_DIR).$(VERS)_$(NAME)_$(TEST_FILE).out
+
+clean_review:
+	$(A)rm -f $(REV_DIR).*.out
+
+clean_d:
+	$(A)rm -f $(DEP_DEBUG_DIR)*.d $(DEP_RELEASE_DIR)*.d
+
+################################################################################
+
+build:
+	$(A)mkdir -p $(LIB_DIR) $(INCLUDE_DIR) $(REV_DIR) $(TEST_DIR) $(DEP_DEBUG_DIR) $(DEP_RELEASE_DIR)
+
+#$(LIB_DIR):
+#	$(A)mkdir -p $@
